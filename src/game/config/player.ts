@@ -1,0 +1,16 @@
+export const PLAYER_CONFIG = {
+  speed: 280,
+  acceleration: 1600,
+  deceleration: 1200,
+  hp: 4,
+  maxHp: 4,
+  width: 20,
+  height: 24,
+  color: 0x44bbff,
+  thrusterColor: 0xff6622,
+  fireCooldown: 0.11,
+  bombCount: 3,
+  bombDamage: 10,
+  invincibilityDuration: 1.2,
+  hitboxShrink: 0.6,
+} as const;
