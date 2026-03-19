@@ -14,14 +14,22 @@ export class InputManager {
   private keys = new Map<string, boolean>();
   private justPressed = new Map<string, boolean>();
   private enabled = true;
+  private mouseDown = false;
 
   init(): void {
-    window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('keydown', this.onKeyDown, { capture: true });
+    window.addEventListener('keyup', this.onKeyUp, { capture: true });
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    // Blur focused UI elements so keys always reach the game
+    if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
+
     if (!this.keys.get(e.key)) {
       this.justPressed.set(e.key, true);
     }
@@ -36,13 +44,24 @@ export class InputManager {
     this.keys.set(e.key, false);
   };
 
+  private onMouseDown = (): void => {
+    this.mouseDown = true;
+  };
+
+  private onMouseUp = (): void => {
+    this.mouseDown = false;
+  };
+
   private onBlur = (): void => {
     this.keys.clear();
     this.justPressed.clear();
+    this.mouseDown = false;
   };
 
   isAction(action: Action): boolean {
     if (!this.enabled) return false;
+    // Mouse left-click = fire
+    if (action === 'fire' && this.mouseDown) return true;
     return ACTION_KEYS[action].some(key => this.keys.get(key) === true);
   }
 
@@ -60,12 +79,15 @@ export class InputManager {
     if (!enabled) {
       this.keys.clear();
       this.justPressed.clear();
+      this.mouseDown = false;
     }
   }
 
   destroy(): void {
-    window.removeEventListener('keydown', this.onKeyDown);
-    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('keydown', this.onKeyDown, { capture: true } as EventListenerOptions);
+    window.removeEventListener('keyup', this.onKeyUp, { capture: true } as EventListenerOptions);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
   }
 }

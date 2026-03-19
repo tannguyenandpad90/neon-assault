@@ -1,6 +1,8 @@
 import type { Entity, Tag, WeaponConfig } from '@game/types';
 import { createEntity } from './Entity';
 import { EntityManager } from '@game/core/EntityManager';
+import { PLAYER_HOMING } from '@game/config/weapons';
+import { createPlayerBulletSprite, createEnemyBulletSprite, createHomingSprite } from '@game/fx/SpriteFactory';
 import { Container } from 'pixi.js';
 
 export function createProjectile(
@@ -14,6 +16,16 @@ export function createProjectile(
   const tags: Tag[] = ['projectile', ownerTag];
   const isPlayer = ownerTag === 'playerProjectile';
 
+  // Choose sprite based on weapon type
+  let sprite;
+  if (isPlayer && config === PLAYER_HOMING) {
+    sprite = createHomingSprite();
+  } else if (isPlayer) {
+    sprite = createPlayerBulletSprite();
+  } else {
+    sprite = createEnemyBulletSprite();
+  }
+
   return createEntity({
     x,
     y,
@@ -23,26 +35,10 @@ export function createProjectile(
     height: config.height,
     damage: config.damage,
     tags,
-    buildSprite: (g) => {
-      g.roundRect(
-        -config.width * 0.5,
-        -config.height * 0.5,
-        config.width,
-        config.height,
-        config.width * 0.3,
-      ).fill({ color: config.color });
-
-      g.circle(0, 0, config.width)
-        .fill({ color: config.color, alpha: 0.3 });
-    },
+    sprite,
   });
 }
 
-/**
- * Create a projectile, register it, and add it to the display layer.
- * Single call replaces the 3-line pattern duplicated across WeaponSystem,
- * EnemyBehaviorSystem, and BossSystem.
- */
 export function spawnProjectile(
   x: number,
   y: number,

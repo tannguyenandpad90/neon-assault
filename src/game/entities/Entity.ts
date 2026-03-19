@@ -1,4 +1,4 @@
-import { Graphics } from 'pixi.js';
+import { Graphics, Sprite, Container } from 'pixi.js';
 import type { Entity, Tag, EntityData } from '@game/types';
 
 interface CreateEntityConfig {
@@ -14,14 +14,23 @@ interface CreateEntityConfig {
   scoreValue?: number;
   tags: Tag[];
   data?: EntityData;
-  buildSprite: (g: Graphics) => void;
+  buildSprite?: (g: Graphics) => void;
+  sprite?: Sprite;
 }
 
 export function createEntity(config: CreateEntityConfig): Entity {
-  const g = new Graphics();
-  config.buildSprite(g);
-  g.x = config.x;
-  g.y = config.y;
+  let displayObject: Container | Graphics;
+
+  if (config.sprite) {
+    displayObject = config.sprite;
+  } else {
+    const g = new Graphics();
+    config.buildSprite?.(g);
+    displayObject = g;
+  }
+
+  displayObject.x = config.x;
+  displayObject.y = config.y;
 
   const hp = config.hp ?? 1;
 
@@ -39,7 +48,7 @@ export function createEntity(config: CreateEntityConfig): Entity {
     maxHp: config.maxHp ?? hp,
     damage: config.damage ?? 0,
     scoreValue: config.scoreValue ?? 0,
-    sprite: g,
+    sprite: displayObject,
     alive: true,
     data: config.data ?? {},
   };
