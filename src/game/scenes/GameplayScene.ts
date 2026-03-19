@@ -8,6 +8,9 @@ import { Camera } from '@game/core/Camera';
 import { checkCollisions } from '@game/core/CollisionSystem';
 import { GameBridge } from '@app/GameBridge';
 import { FxCoordinator, SHAKE } from '@game/fx/FxCoordinator';
+import { Starfield } from '@game/fx/Starfield';
+import { ThrusterFX } from '@game/fx/ThrusterFX';
+import { Vignette } from '@game/fx/Vignette';
 import { createPlayer } from '@game/entities/Player';
 import { createBoss } from '@game/entities/Boss';
 import { createEnemy } from '@game/entities/Enemy';
@@ -22,29 +25,15 @@ import { WaveDirector } from '@game/systems/SpawnSystem';
 import { BossController } from '@game/systems/BossSystem';
 import { updateBomb } from '@game/systems/BombSystem';
 import { cleanup } from '@game/systems/CleanupSystem';
-import {
-  WORLD_WIDTH, WORLD_HEIGHT, STARFIELD, BOSS_DEATH,
-} from '@game/config/game';
-import {
-  POWERUP_DROP_CHANCE, POWERUP_DROP_WEIGHTS,
-  MAGNET_PULL_RADIUS, MAGNET_PULL_SPEED,
-} from '@game/config/powerups';
+import { WORLD_WIDTH, WORLD_HEIGHT, BOSS_DEATH } from '@game/config/game';
+import { POWERUP_DROP_CHANCE, POWERUP_DROP_WEIGHTS, MAGNET_PULL_RADIUS, MAGNET_PULL_SPEED } from '@game/config/powerups';
 import { ENEMIES } from '@game/config/enemies';
 import { BOSS_DREADNOUGHT } from '@game/config/bosses';
 import type { BossConfig } from '@game/config/bosses';
 
-interface Star {
-  graphic: Graphics;
-  speed: number;
-}
-
-const BOSS_REGISTRY: Record<string, BossConfig> = {
-  dreadnought: BOSS_DREADNOUGHT,
-};
-
+const BOSS_REGISTRY: Record<string, BossConfig> = { dreadnought: BOSS_DREADNOUGHT };
 const POWERUP_TYPES: PowerUpType[] = ['firepower', 'firerate', 'shield', 'heal', 'bomb', 'magnet', 'overdrive'];
 
-// Shake intensity per enemy type
 const ENEMY_SHAKE: Partial<Record<EnemyType, { intensity: number; duration: number }>> = {
   tank: SHAKE.EXPLOSION_LG,
   miniboss: SHAKE.EXPLOSION_LG,
@@ -60,18 +49,21 @@ export class GameplayScene implements Scene {
   private camera: Camera;
   private bridge: GameBridge;
   private fx!: FxCoordinator;
+  private starfield!: Starfield;
+  private thruster!: ThrusterFX;
+  private vignette!: Vignette;
 
   private bgLayer = new Container();
   private entityLayer = new Container();
   private projectileLayer = new Container();
   private fxLayer = new Container();
+  private uiLayer = new Container();
 
   private player!: Entity;
   private shieldRing: Graphics | null = null;
   private combo = new ComboTracker();
   private waveDirector = new WaveDirector();
   private score = 0;
-  private stars: Star[] = [];
 
   private bossEntity: Entity | null = null;
   private bossController: BossController | null = null;
@@ -81,11 +73,8 @@ export class GameplayScene implements Scene {
   private trailCounter = 0;
 
   constructor(
-    engine: Engine,
-    input: InputManager,
-    entityManager: EntityManager,
-    camera: Camera,
-    bridge: GameBridge,
+    engine: Engine, input: InputManager, entityManager: EntityManager,
+    camera: Camera, bridge: GameBridge,
   ) {
     this.engine = engine;
     this.input = input;
@@ -93,8 +82,6 @@ export class GameplayScene implements Scene {
     this.camera = camera;
     this.bridge = bridge;
   }
-
-  // ─── Lifecycle ───
 
   setup(): void {
     this.entities.clear();
@@ -112,15 +99,18 @@ export class GameplayScene implements Scene {
     this.entityLayer.removeChildren();
     this.projectileLayer.removeChildren();
     this.fxLayer.removeChildren();
+    this.uiLayer.removeChildren();
 
     this.engine.stage.addChild(this.bgLayer);
     this.engine.stage.addChild(this.entityLayer);
     this.engine.stage.addChild(this.projectileLayer);
     this.engine.stage.addChild(this.fxLayer);
+    this.engine.stage.addChild(this.uiLayer);
 
+    this.starfield = new Starfield(this.bgLayer, WORLD_WIDTH, WORLD_HEIGHT);
     this.fx = new FxCoordinator(this.fxLayer, this.camera, WORLD_WIDTH, WORLD_HEIGHT);
-
-    this.createStarfield();
+    this.thruster = new ThrusterFX(this.fxLayer);
+    this.vignette = new Vignette(this.uiLayer, WORLD_WIDTH, WORLD_HEIGHT);
 
     this.player = createPlayer();
     this.entities.add(this.player);
@@ -137,10 +127,9 @@ export class GameplayScene implements Scene {
   }
 
   update(rawDt: number): void {
-    // Apply hitstop time scale
     const dt = rawDt * this.fx.hitstopScale;
 
-    this.updateStarfield(dt);
+    this.starfield.update(dt);
     this.updatePlayerPhase(dt);
     this.updateEnemyPhase(dt);
     this.updateSpawnPhase(dt);
@@ -150,18 +139,15 @@ export class GameplayScene implements Scene {
 
     const pairs = checkCollisions(this.entities);
     const damageResult = processDamage(pairs);
-
-    if (this.handleDamageResult(damageResult)) return; // player died
+    if (this.handleDamageResult(damageResult)) return;
     this.handlePowerUps(damageResult);
 
     const prevMult = this.combo.multiplier;
     this.combo.update(dt);
-    if (this.combo.multiplier > prevMult) {
-      this.sfx('sfx', { key: 'combo_up' });
-    }
+    if (this.combo.multiplier > prevMult) this.sfx('sfx', { key: 'combo_up' });
 
-    // FX always updates with raw dt (not affected by hitstop)
     this.fx.update(rawDt);
+    this.thruster.update(rawDt);
     this.updateShieldRing();
 
     cleanup(this.entities);
@@ -182,14 +168,13 @@ export class GameplayScene implements Scene {
     this.engine.stage.removeChild(this.entityLayer);
     this.engine.stage.removeChild(this.projectileLayer);
     this.engine.stage.removeChild(this.fxLayer);
+    this.engine.stage.removeChild(this.uiLayer);
 
-    if (this.shieldRing) {
-      this.shieldRing.destroy();
-      this.shieldRing = null;
-    }
+    if (this.shieldRing) { this.shieldRing.destroy(); this.shieldRing = null; }
 
     this.fx.clear();
-    this.stars = [];
+    this.thruster.destroy();
+    this.vignette.destroy();
     this.regularEnemiesCache = [];
     this.camera.reset();
     this.engine.stage.x = 0;
@@ -198,10 +183,19 @@ export class GameplayScene implements Scene {
     this.sfx('music', { action: 'stop' });
   }
 
-  // ─── Update Phases ───
+  // ─── Phases ───
 
   private updatePlayerPhase(dt: number): void {
     updatePlayer(this.player, this.input, dt);
+
+    // Thruster particles
+    const hasInput = this.input.isAction('up') || this.input.isAction('down') ||
+                     this.input.isAction('left') || this.input.isAction('right');
+    const intensity = hasInput ? 3 : 0.5;
+    this.thruster.emit(
+      this.player.x, this.player.y + this.player.height * 0.45,
+      this.player.vx, this.player.vy, intensity,
+    );
 
     const fired = updateWeapons(this.player, this.input, dt, this.entities, this.projectileLayer);
     if (fired) {
@@ -238,11 +232,7 @@ export class GameplayScene implements Scene {
           this.fx.hitstop(0.15, 0.3);
           for (let i = 0; i < 6; i++) {
             const a = (Math.PI * 2 / 6) * i;
-            this.fx.explosion(
-              this.bossEntity.x + Math.cos(a) * 30,
-              this.bossEntity.y + Math.sin(a) * 30,
-              25, 0xff4422,
-            );
+            this.fx.explosion(this.bossEntity.x + Math.cos(a) * 30, this.bossEntity.y + Math.sin(a) * 30, 25, 0xff4422);
           }
           this.sfx('sfx', { key: 'boss_phase' });
           this.bridge.emit('boss:phase', { phase: evt.phase ?? 0 });
@@ -250,10 +240,7 @@ export class GameplayScene implements Scene {
         if (evt.type === 'entry_complete') {
           this.sfx('sfx', { key: 'boss_enter' });
           this.sfx('music', { track: 'boss' });
-          this.bridge.emit('boss:enter', {
-            name: this.activeBossConfig?.name ?? 'BOSS',
-            maxHp: this.bossEntity.maxHp,
-          });
+          this.bridge.emit('boss:enter', { name: this.activeBossConfig?.name ?? 'BOSS', maxHp: this.bossEntity.maxHp });
         }
       }
     }
@@ -280,43 +267,28 @@ export class GameplayScene implements Scene {
 
   private updateHomingProjectiles(dt: number): void {
     this.trailCounter++;
-
     for (const proj of this.entities.iterateTag('homingProjectile')) {
       if (!proj.alive) continue;
-
-      // Trail particle every 3 frames
-      if (this.trailCounter % 3 === 0) {
-        this.fx.trail(proj.x, proj.y, 3, 0x44ffaa);
-      }
+      if (this.trailCounter % 3 === 0) this.fx.trail(proj.x, proj.y, 3, 0x44ffaa);
 
       let nearestDist = Infinity;
       let nearestEnemy: Entity | null = null;
-
       for (const enemy of this.entities.iterateTag('enemy')) {
         if (!enemy.alive) continue;
-        const dx = enemy.x - proj.x;
-        const dy = enemy.y - proj.y;
-        const dist = dx * dx + dy * dy;
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestEnemy = enemy;
-        }
+        const dx = enemy.x - proj.x, dy = enemy.y - proj.y;
+        const d = dx * dx + dy * dy;
+        if (d < nearestDist) { nearestDist = d; nearestEnemy = enemy; }
       }
-
       if (nearestEnemy) {
-        const dx = nearestEnemy.x - proj.x;
-        const dy = nearestEnemy.y - proj.y;
+        const dx = nearestEnemy.x - proj.x, dy = nearestEnemy.y - proj.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist > 1) {
           const speed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
-          const turnRate = 5.0 * dt;
-          proj.vx += (dx / dist) * speed * turnRate;
-          proj.vy += (dy / dist) * speed * turnRate;
-          const newSpeed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
-          if (newSpeed > 0) {
-            proj.vx = (proj.vx / newSpeed) * speed;
-            proj.vy = (proj.vy / newSpeed) * speed;
-          }
+          const turn = 5.0 * dt;
+          proj.vx += (dx / dist) * speed * turn;
+          proj.vy += (dy / dist) * speed * turn;
+          const ns = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
+          if (ns > 0) { proj.vx = (proj.vx / ns) * speed; proj.vy = (proj.vy / ns) * speed; }
         }
       }
     }
@@ -325,29 +297,21 @@ export class GameplayScene implements Scene {
   private updateMagnetPull(dt: number): void {
     const pd = playerData(this.player);
     if (pd.magnetTimer <= 0) return;
-
-    const radiusSq = MAGNET_PULL_RADIUS * MAGNET_PULL_RADIUS;
-
+    const rSq = MAGNET_PULL_RADIUS * MAGNET_PULL_RADIUS;
     for (const pu of this.entities.iterateTag('powerup')) {
       if (!pu.alive) continue;
-      const dx = this.player.x - pu.x;
-      const dy = this.player.y - pu.y;
-      const distSq = dx * dx + dy * dy;
-
-      if (distSq < radiusSq && distSq > 1) {
-        const dist = Math.sqrt(distSq);
-        const pull = MAGNET_PULL_SPEED * dt;
-        pu.x += (dx / dist) * pull;
-        pu.y += (dy / dist) * pull;
-        pu.sprite.x = pu.x;
-        pu.sprite.y = pu.y;
+      const dx = this.player.x - pu.x, dy = this.player.y - pu.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < rSq && dSq > 1) {
+        const d = Math.sqrt(dSq), pull = MAGNET_PULL_SPEED * dt;
+        pu.x += (dx / d) * pull; pu.y += (dy / d) * pull;
+        pu.sprite.x = pu.x; pu.sprite.y = pu.y;
       }
     }
   }
 
-  // ─── Collision Handling ───
+  // ─── Collision ───
 
-  /** Returns true if player died (caller should return early). */
   private handleDamageResult(result: DamageResult): boolean {
     if (result.playerHit) {
       this.fx.shake(SHAKE.HIT);
@@ -356,7 +320,6 @@ export class GameplayScene implements Scene {
       this.sfx('sfx', { key: 'hit_player' });
       this.bridge.emit('player:hit', undefined);
       this.bridge.emit('hp:change', { hp: this.player.hp, maxHp: this.player.maxHp });
-
       if (this.player.hp <= 0) {
         this.fx.flash(0xff0000, 0.5, 0.6);
         this.sfx('sfx', { key: 'game_over' });
@@ -365,20 +328,14 @@ export class GameplayScene implements Scene {
         return true;
       }
     }
-
     for (let i = 0; i < result.bossHits.length; i++) {
       this.fx.hitFlash(result.bossHits[i]);
       this.sfx('sfx', { key: 'hit_enemy', volume: 0.3 });
     }
-
     for (const death of result.deaths) {
-      if (death.entity.tags.has('boss')) {
-        this.handleBossDeath(death.entity);
-      } else if (death.entity.tags.has('enemy')) {
-        this.handleEnemyDeath(death.entity);
-      }
+      if (death.entity.tags.has('boss')) this.handleBossDeath(death.entity);
+      else if (death.entity.tags.has('enemy')) this.handleEnemyDeath(death.entity);
     }
-
     this.score += result.scoreGained * this.combo.multiplier;
     return false;
   }
@@ -386,44 +343,32 @@ export class GameplayScene implements Scene {
   private handleEnemyDeath(enemy: Entity): void {
     const ed = enemyData(enemy);
     const config = ENEMIES[ed.enemyType];
-
     this.fx.explosion(enemy.x, enemy.y, enemy.width * 1.5);
     this.fx.shake(ENEMY_SHAKE[ed.enemyType] ?? SHAKE.EXPLOSION);
     this.sfx('sfx', { key: 'explosion_sm' });
     this.combo.onKill();
-
-    if (config.splitInto && config.splitCount) {
-      this.spawnSplitFragments(enemy.x, enemy.y, config.splitInto, config.splitCount);
-    }
-
-    if (config.guaranteedDrop || Math.random() < POWERUP_DROP_CHANCE) {
-      this.dropPowerUp(enemy.x, enemy.y);
-    }
+    if (config.splitInto && config.splitCount) this.spawnSplitFragments(enemy.x, enemy.y, config.splitInto, config.splitCount);
+    if (config.guaranteedDrop || Math.random() < POWERUP_DROP_CHANCE) this.dropPowerUp(enemy.x, enemy.y);
   }
 
   private spawnSplitFragments(x: number, y: number, type: EnemyType, count: number): void {
     for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 / count) * i + Math.PI * 0.25;
-      const fragment = createEnemy(type, x + Math.cos(angle) * 15, y + Math.sin(angle) * 15);
-      fragment.vx = Math.cos(angle) * 60;
-      this.entities.add(fragment);
-      this.entityLayer.addChild(fragment.sprite);
+      const a = (Math.PI * 2 / count) * i + Math.PI * 0.25;
+      const f = createEnemy(type, x + Math.cos(a) * 15, y + Math.sin(a) * 15);
+      f.vx = Math.cos(a) * 60;
+      this.entities.add(f);
+      this.entityLayer.addChild(f.sprite);
     }
   }
 
   private handlePowerUps(damageResult: DamageResult): void {
     const events = processPowerUps(damageResult.powerUpPickups, this.player);
     const pd = playerData(this.player);
-
     for (const evt of events) {
       this.sfx('sfx', { key: 'powerup' });
       this.bridge.emit('powerup:pickup', { type: evt.type });
-      if (evt.type === 'heal' || evt.type === 'shield') {
-        this.bridge.emit('hp:change', { hp: this.player.hp, maxHp: this.player.maxHp });
-      }
-      if (evt.type === 'bomb') {
-        this.bridge.emit('bomb:change', { bombs: pd.bombs });
-      }
+      if (evt.type === 'heal' || evt.type === 'shield') this.bridge.emit('hp:change', { hp: this.player.hp, maxHp: this.player.maxHp });
+      if (evt.type === 'bomb') this.bridge.emit('bomb:change', { bombs: pd.bombs });
     }
   }
 
@@ -455,125 +400,61 @@ export class GameplayScene implements Scene {
   private handleBossDeath(boss: Entity): void {
     const { x: cx, y: cy } = boss;
     const d = BOSS_DEATH;
-
     for (let i = 0; i < d.explosionCount; i++) {
-      const angle = (Math.PI * 2 / d.explosionCount) * i;
+      const a = (Math.PI * 2 / d.explosionCount) * i;
       const dist = 10 + Math.random() * d.explosionSpread;
-      this.fx.deferExplosion(
-        cx + Math.cos(angle) * dist,
-        cy + Math.sin(angle) * dist,
-        d.explosionBaseSize + Math.random() * d.explosionSizeVariance,
-        d.colors[i % d.colors.length],
-        i * d.explosionStaggerDelay,
-      );
+      this.fx.deferExplosion(cx + Math.cos(a) * dist, cy + Math.sin(a) * dist, d.explosionBaseSize + Math.random() * d.explosionSizeVariance, d.colors[i % d.colors.length], i * d.explosionStaggerDelay);
     }
-
     this.fx.explosion(cx, cy, d.centralExplosionSize, 0xffffff);
     this.fx.shakeRaw(d.shakeIntensity, d.shakeDuration);
     this.fx.flash(0xffffff, 0.3, 0.5);
     this.fx.hitstop(0.1, 0.5);
     this.sfx('sfx', { key: 'boss_death' });
     this.sfx('music', { track: 'gameplay' });
-
     this.combo.onKill();
-
     for (let i = 0; i < d.drops.length; i++) {
       const pu = createPowerUp(d.drops[i], cx + (i - 1) * 20, cy);
-      this.entities.add(pu);
-      this.entityLayer.addChild(pu.sprite);
+      this.entities.add(pu); this.entityLayer.addChild(pu.sprite);
     }
-
     this.waveDirector.setBossDefeated();
     this.destroyBoss();
   }
 
   private destroyBoss(): void {
-    if (this.bossController) {
-      this.bossController.destroy();
-      this.bossController = null;
-    }
-    this.bossEntity = null;
-    this.activeBossConfig = null;
-  }
-
-  // ─── Starfield ───
-
-  private createStarfield(): void {
-    const { count, speedMin, speedMax } = STARFIELD;
-    const speedRange = speedMax - speedMin;
-    for (let i = 0; i < count; i++) {
-      const speed = speedMin + Math.random() * speedRange;
-      const ratio = speed / speedMax;
-      const g = new Graphics();
-      g.circle(0, 0, 0.5 + ratio * 1.5).fill({ color: 0xffffff, alpha: 0.2 + ratio * 0.6 });
-      g.x = Math.random() * WORLD_WIDTH;
-      g.y = Math.random() * WORLD_HEIGHT;
-      this.bgLayer.addChild(g);
-      this.stars.push({ graphic: g, speed });
-    }
-  }
-
-  private updateStarfield(dt: number): void {
-    for (let i = 0; i < this.stars.length; i++) {
-      const star = this.stars[i];
-      star.graphic.y += star.speed * dt;
-      if (star.graphic.y > WORLD_HEIGHT + 5) {
-        star.graphic.y = -5;
-        star.graphic.x = Math.random() * WORLD_WIDTH;
-      }
-    }
+    if (this.bossController) { this.bossController.destroy(); this.bossController = null; }
+    this.bossEntity = null; this.activeBossConfig = null;
   }
 
   // ─── Helpers ───
 
   private dropPowerUp(x: number, y: number): void {
-    const weights = POWERUP_DROP_WEIGHTS;
-    let roll = Math.random() * weights.total;
+    const w = POWERUP_DROP_WEIGHTS;
+    let roll = Math.random() * w.total;
     let type: PowerUpType = 'heal';
-    for (let i = 0; i < POWERUP_TYPES.length; i++) {
-      roll -= weights.values[i];
-      if (roll <= 0) { type = POWERUP_TYPES[i]; break; }
-    }
+    for (let i = 0; i < POWERUP_TYPES.length; i++) { roll -= w.values[i]; if (roll <= 0) { type = POWERUP_TYPES[i]; break; } }
     const pu = createPowerUp(type, x, y);
-    this.entities.add(pu);
-    this.entityLayer.addChild(pu.sprite);
+    this.entities.add(pu); this.entityLayer.addChild(pu.sprite);
   }
 
-  private sfx<K extends 'sfx' | 'music'>(
-    event: K,
-    data: import('@game/types/events').GameEventMap[K],
-  ): void {
+  private sfx<K extends 'sfx' | 'music'>(event: K, data: import('@game/types/events').GameEventMap[K]): void {
     this.bridge.emit(event, data);
   }
 
   private syncBridge(): void {
     const pd = playerData(this.player);
     const bossAlive = this.bossEntity != null && this.bossEntity.alive;
-
     let enemyCount = 0;
-    for (const e of this.entities.iterateTag('enemy')) {
-      if (e.alive && !e.tags.has('boss')) enemyCount++;
-    }
-
+    for (const e of this.entities.iterateTag('enemy')) { if (e.alive && !e.tags.has('boss')) enemyCount++; }
     this.bridge.updateSnapshot({
-      score: this.score,
-      hp: this.player.hp,
-      maxHp: this.player.maxHp,
-      combo: this.combo.count,
-      multiplier: this.combo.multiplier,
-      bombs: pd.bombs,
+      score: this.score, hp: this.player.hp, maxHp: this.player.maxHp,
+      combo: this.combo.count, multiplier: this.combo.multiplier, bombs: pd.bombs,
       wave: this.waveDirector.waveIndex + 1,
-      bossActive: bossAlive,
-      bossName: this.activeBossConfig?.name ?? '',
-      bossHp: this.bossEntity?.hp ?? 0,
-      bossMaxHp: this.bossEntity?.maxHp ?? 0,
+      bossActive: bossAlive, bossName: this.activeBossConfig?.name ?? '',
+      bossHp: this.bossEntity?.hp ?? 0, bossMaxHp: this.bossEntity?.maxHp ?? 0,
       bossPhase: bossAlive ? bossData(this.bossEntity!).phaseIndex : 0,
       firepowerLevel: pd.overdriveTimer > 0 ? 4 : pd.firepowerLevel,
-      shieldActive: pd.shieldActive,
-      shieldTimer: pd.shieldTimer,
-      magnetTimer: pd.magnetTimer,
-      overdriveTimer: pd.overdriveTimer,
-      enemyCount,
+      shieldActive: pd.shieldActive, shieldTimer: pd.shieldTimer,
+      magnetTimer: pd.magnetTimer, overdriveTimer: pd.overdriveTimer, enemyCount,
     });
   }
 }
