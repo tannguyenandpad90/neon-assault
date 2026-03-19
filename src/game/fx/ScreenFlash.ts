@@ -4,8 +4,13 @@ export class ScreenFlash {
   private overlay: Graphics;
   private timer = 0;
   private duration = 0;
+  private intensity = 0;
+  private width: number;
+  private height: number;
 
   constructor(parent: Container, width: number, height: number) {
+    this.width = width;
+    this.height = height;
     this.overlay = new Graphics();
     this.overlay.rect(0, 0, width, height).fill({ color: 0xffffff });
     this.overlay.alpha = 0;
@@ -15,19 +20,20 @@ export class ScreenFlash {
 
   flash(color: number, duration = 0.12, intensity = 0.4): void {
     this.overlay.clear();
-    this.overlay.rect(0, 0, this.overlay.parent?.width ?? 480, this.overlay.parent?.height ?? 720)
-      .fill({ color });
-    this.overlay.alpha = intensity;
+    this.overlay.rect(0, 0, this.width, this.height).fill({ color });
+    this.intensity = intensity;
     this.timer = duration;
     this.duration = duration;
+    this.overlay.alpha = intensity;
   }
 
   update(dt: number): void {
     if (this.timer <= 0) return;
     this.timer -= dt;
-    this.overlay.alpha = Math.max(0, (this.timer / this.duration) * this.overlay.alpha);
     if (this.timer <= 0) {
       this.overlay.alpha = 0;
+    } else {
+      this.overlay.alpha = this.intensity * (this.timer / this.duration);
     }
   }
 

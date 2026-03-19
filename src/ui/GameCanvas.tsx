@@ -2,8 +2,7 @@ import { useRef, useEffect } from 'react';
 import { Game } from '@game/Game';
 import { GameBridge } from '@app/GameBridge';
 
-const bridge = new GameBridge();
-
+let bridge = new GameBridge();
 let gameInstance: Game | null = null;
 
 export function getGameBridge(): GameBridge {
@@ -17,6 +16,8 @@ export function GameCanvas() {
     const container = containerRef.current;
     if (!container) return;
 
+    // Fresh bridge + game each mount (handles StrictMode double-mount)
+    bridge = new GameBridge();
     const game = new Game(bridge);
     gameInstance = game;
 
